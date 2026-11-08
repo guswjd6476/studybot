@@ -27,9 +27,10 @@ const BREAK = 10;
 export const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 // '9-12 수업', '14:00~16:30 알바', '오후 2시부터 4시 병원' 같은 줄에서 일정을 읽는다
-// 오전·오후를 안 쓴 1~6시는 오후로 본다 (새벽 일정은 드묾)
+// 오전·오후를 안 쓴 1~6시는 오후로 본다 ('2-4 병원'). 아침 일정은 '오전·아침·새벽 6-8' 또는 '06:30'처럼 0을 붙여 쓴다
 const RANGE =
-    /(오전|오후)?\s*(\d{1,2})(?:[:시]\s*(\d{2})?\s*분?)?\s*(?:[-~]|부터)\s*(오전|오후)?\s*(\d{1,2})(?:[:시]\s*(\d{2})?\s*분?)?\s*(?:시|까지)*/;
+    /(오전|오후|아침|새벽|저녁|밤)?\s*(\d{1,2})(?:[:시]\s*(\d{2})?\s*분?)?\s*(?:[-~]|부터)\s*(오전|오후|아침|새벽|저녁|밤)?\s*(\d{1,2})(?:[:시]\s*(\d{2})?\s*분?)?\s*(?:시|까지)*/;
+const PM = ['오후', '저녁', '밤'];
 
 export function parseSchedule(text: string): Busy[] {
     const busy: Busy[] = [];
@@ -38,8 +39,8 @@ export function parseSchedule(text: string): Busy[] {
         if (!m) continue;
         const hour = (h: string, ampm: string | undefined) => {
             let v = Number(h);
-            if (ampm === '오후' && v < 12) v += 12;
-            else if (!ampm && v >= 1 && v <= 6) v += 12;
+            if (ampm && PM.includes(ampm) && v < 12) v += 12;
+            else if (!ampm && h.length === 1 && v >= 1 && v <= 6) v += 12; // '06'처럼 0을 붙이면 적힌 그대로
             return v;
         };
         const start = hour(m[2], m[1]) * 60 + Number(m[3] ?? 0);

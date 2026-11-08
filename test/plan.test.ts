@@ -112,3 +112,15 @@ test('내일 계획 제목', () => {
     assert.match(planText([], [], '2026-11-09', 240, '내일'), /📅 <b>내일 공부 추천<\/b> \(2026-11-09\)/);
     assert.match(planText(parseSchedule('8-23 일'), [], '2026-11-09', 240, '내일'), /^📅[\s\S]*내일은 30분 이상/);
 });
+
+test('아침 일정 적는 법', () => {
+    const at = (s: string) => parseSchedule(s).map((b) => `${fmt(b.start)}-${fmt(b.end)}`);
+    assert.deepEqual(at('6:30-11:30'), ['18:30-23:30']); // 그냥 쓰면 예전처럼 오후
+    assert.deepEqual(at('오전 6:30-11:30'), ['06:30-11:30']);
+    assert.deepEqual(at('아침 6:30-11:30'), ['06:30-11:30']);
+    assert.deepEqual(at('새벽 5-7 운동'), ['05:00-07:00']);
+    assert.deepEqual(at('06:30-11:30'), ['06:30-11:30']);
+    assert.deepEqual(at('저녁 7-9'), ['19:00-21:00']);
+    assert.deepEqual(at('밤 9-11 과외'), ['21:00-23:00']);
+    assert.deepEqual(at('2-4 병원'), ['14:00-16:00']);
+});
