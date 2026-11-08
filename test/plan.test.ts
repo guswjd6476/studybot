@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPlan, dur, fmt, freeBlocks, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart } from '../src/plan.ts';
+import { buildPlan, dayNames, dur, fixedOn, fmt, freeBlocks, mergeBusy, parseDays, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart } from '../src/plan.ts';
 
 const TODAY = '2026-11-08';
 
@@ -71,4 +71,27 @@ test('기록 합계와 이번 주', () => {
     ];
     assert.deepEqual(totals(log, '2026-11-02', '2026-11-08'), [['수학', 110], ['영어', 30]]);
     assert.equal(sumMin(log, '2026-11-08', '2026-11-08'), 90);
+});
+
+test('고정 일정: 요일 읽기와 오늘 일정 합치기', () => {
+    assert.deepEqual(parseDays('월수금'), [1, 3, 5]);
+    assert.deepEqual(parseDays('월요일,목요일'), [1, 4]);
+    assert.deepEqual(parseDays('월-금'), [1, 2, 3, 4, 5]);
+    assert.deepEqual(parseDays('토~일'), [6, 0]);
+    assert.deepEqual(parseDays('평일'), [1, 2, 3, 4, 5]);
+    assert.equal(parseDays('매일')!.length, 7);
+    assert.equal(parseDays('알바'), null);
+    assert.equal(parseDays('금-월'), null);
+    assert.equal(dayNames([5, 1, 3]), '월수금');
+    assert.equal(dayNames([0, 6]), '토일');
+
+    const fixed = [
+        { days: [0], start: 18 * 60, end: 22 * 60, label: '알바' }, // 일요일
+        { days: [1], start: 9 * 60, end: 12 * 60, label: '학원' },
+    ];
+    const today = fixedOn(fixed, TODAY); // 2026-11-08 = 일요일
+    assert.deepEqual(today.map((f) => f.label), ['알바']);
+    const busy = mergeBusy(parseSchedule('9-12 수업\n18-22 알바'), today);
+    assert.deepEqual(busy.map((b) => b.label), ['수업', '알바']); // 같은 시간은 한 번만
+    assert.deepEqual(mergeBusy(parseSchedule('9-12 수업'), today).map((b) => [fmt(b.start), b.label]), [['09:00', '수업'], ['18:00', '알바 🔁']]);
 });

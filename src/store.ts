@@ -3,7 +3,7 @@
 // shortcut: 파일 하나라 봇 서버를 여러 대 띄우면 안 되고, 사용자가 수백 명을 넘으면 DB로 옮긴다
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Done, Goal } from './plan.ts';
+import type { Done, Fixed, Goal } from './plan.ts';
 
 export interface ChatData {
     goals: Goal[];
@@ -12,6 +12,7 @@ export interface ChatData {
     name?: string; // 단톡방에서 누구 것인지 보여줄 이름
     chat?: number; // 아침 알림을 보낼 대화방 (없으면 1:1)
     groups?: number[]; // 같이 쓰는 단톡방 (/모두 에 보이는 곳)
+    fixed?: Fixed[]; // 매주 반복되는 고정 일정
     log?: Done[]; // 공부 기록 (shortcut: 계속 쌓기만 한다, 하루 몇 건이라 몇 년은 괜찮고 느려지면 오래된 걸 지운다)
 }
 

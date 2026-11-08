@@ -175,3 +175,42 @@ export const weekStart = (today: string) => {
     const t = Date.parse(today);
     return new Date(t - ((new Date(t).getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
 };
+
+// ── 고정 일정 (매주 반복: 알바·학원 등) ──
+export interface Fixed extends Busy {
+    days: number[]; // 0=일 ~ 6=토 (Date.getUTCDay)
+}
+
+const WEEK = '월화수목금토일'; // 월요일부터
+const dayNum = (ch: string) => '일월화수목금토'.indexOf(ch);
+
+// '월수금', '월,수', '월-금', '매일', '평일', '주말' → 요일 번호 (모르면 null)
+export function parseDays(s: string): number[] | null {
+    s = s.replace(/요일/g, '').replace(/[,·]/g, '');
+    if (s === '매일') return [0, 1, 2, 3, 4, 5, 6];
+    if (s === '평일') return [1, 2, 3, 4, 5];
+    if (s === '주말') return [0, 6];
+    const range = s.match(/^([월화수목금토일])[-~]([월화수목금토일])$/);
+    if (range) {
+        const [i, j] = [WEEK.indexOf(range[1]), WEEK.indexOf(range[2])];
+        return i < j ? [...WEEK.slice(i, j + 1)].map(dayNum) : null;
+    }
+    if (!s || [...s].some((ch) => dayNum(ch) < 0)) return null;
+    return [...new Set([...s].map(dayNum))];
+}
+
+export const dayNames = (days: number[]) =>
+    days.length === 7 ? '매일' : [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((d) => '일월화수목금토'[d]).join('');
+
+export const fixedOn = (fixed: Fixed[], today: string) => {
+    const day = new Date(Date.parse(today)).getUTCDay();
+    return fixed.filter((f) => f.days.includes(day));
+};
+
+// 보낸 일정 + 오늘 고정 일정 (같은 시간에 또 적었으면 한 번만)
+export function mergeBusy(sent: Busy[], fixed: Busy[]): Busy[] {
+    const all = [...sent];
+    for (const f of fixed)
+        if (!all.some((b) => b.start === f.start && b.end === f.end)) all.push({ start: f.start, end: f.end, label: `${f.label} 🔁` });
+    return all.sort((a, b) => a.start - b.start);
+}

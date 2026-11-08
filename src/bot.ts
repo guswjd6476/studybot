@@ -1,7 +1,25 @@
 // 공부 추천 텔레그램 봇: 오늘 꼭 해야 할 일정을 보내면 남는 시간에 공부 계획을 추천한다
 // 실행: TELEGRAM_BOT_TOKEN=... npm start (롱 폴링이라 웹훅·공개 주소가 필요 없다)
 import { Telegraf } from 'telegraf';
-import { daysLeft, dur, escapeHtml, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart, type Done, type Goal } from './plan.ts';
+import {
+    dayNames,
+    daysLeft,
+    dur,
+    escapeHtml,
+    fixedOn,
+    fmt,
+    mergeBusy,
+    parseDays,
+    parseMinutes,
+    parseSchedule,
+    planText,
+    sumMin,
+    totals,
+    weekStart,
+    type Done,
+    type Fixed,
+    type Goal,
+} from './plan.ts';
 import { allChats, getChat, updateChat } from './store.ts';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -45,6 +63,11 @@ const HELP = [
     '<code>9-12 수업',
     '14:00~16:00 알바</code>',
     '• 일정이 없으면 <code>없음</code> · 하루 전체로 짜기 <code>/추천</code>',
+    '',
+    '🔁 <b>고정 일정</b> (알바·학원처럼 매주 같은 것)',
+    '• <code>/고정 월수금 18-22 알바</code> 한 번 등록하면 그 요일 계획에 자동으로 빠져요',
+    '  요일: <code>월수금</code> · <code>월-금</code> · <code>평일</code> · <code>주말</code> · <code>매일</code>',
+    '• <code>/고정</code> 목록 보기 · <code>/고정삭제 1</code> 번호로 지우기',
     '',
     '🎯 <b>과목</b>',
     '• <code>/목표 수학 12/10</code> 과목 등록 (시험일은 없어도 돼요)',
@@ -137,6 +160,34 @@ bot.hears(/^[/!]알림(?:\s+(\S+))?$/, (ctx) => {
     return ctx.reply(`${who(ctx)}⏰ 매일 ${hm}에 이 방에서 오늘 일정을 물어볼게요.`, html);
 });
 
+const fixedLine = (f: Fixed) => `${dayNames(f.days)} ${fmt(f.start)}–${fmt(f.end)} ${escapeHtml(f.label)}`;
+const FIXED_USAGE = '🔁 이렇게 적어 주세요: <code>/고정 월수금 18-22 알바</code>\n요일: <code>월수금</code> · <code>월-금</code> · <code>평일</code> · <code>주말</code> · <code>매일</code>';
+
+// 고정 일정: /고정 월수금 18-22 알바
+bot.hears(/^[/!]고정(?:\s+(\S+)(?:\s+(.+))?)?$/, (ctx) => {
+    const [, rawDays, rest] = ctx.match;
+    if (!rawDays) {
+        const list = getChat(ctx.from.id).fixed ?? [];
+        if (!list.length) return ctx.reply(`${who(ctx)}등록한 고정 일정이 없어요.\n${FIXED_USAGE}`, html);
+        return ctx.reply(`${who(ctx)}🔁 <b>고정 일정</b>\n${list.map((f, i) => `${i + 1}. ${fixedLine(f)}`).join('\n')}\n\n지우기: <code>/고정삭제 1</code>`, html);
+    }
+    const days = parseDays(rawDays);
+    const busy = rest ? parseSchedule(rest) : [];
+    if (!days || busy.length !== 1) return ctx.reply(FIXED_USAGE, html);
+    const f = { days, ...busy[0] };
+    updateChat(ctx.from.id, (c) => (c.fixed = [...(c.fixed ?? []), f]));
+    return ctx.reply(`${who(ctx)}✅ 고정 일정 등록: ${fixedLine(f)}\n이 요일엔 계획에서 자동으로 빼고 짤게요.`, html);
+});
+
+bot.hears(/^[/!]고정삭제(?:\s+(\d+))?$/, (ctx) => {
+    const list = getChat(ctx.from.id).fixed ?? [];
+    const i = Number(ctx.match[1]) - 1;
+    if (!(i >= 0 && i < list.length)) return ctx.reply(`${who(ctx)}지울 번호를 적어 주세요. <code>/고정</code> 으로 번호를 확인할 수 있어요.`, html);
+    const f = list[i]; // list는 저장된 배열 그 자체라 지우기 전에 꺼내 둔다
+    updateChat(ctx.from.id, (c) => c.fixed!.splice(i, 1));
+    return ctx.reply(`${who(ctx)}🗑 ${fixedLine(f)} 지웠어요.`, html);
+});
+
 // 공부 기록: /기록 수학 50분
 bot.hears(/^[/!]기록(?:\s+(\S+)(?:\s+(.+))?)?$/, (ctx) => {
     const [, subject, raw] = ctx.match;
@@ -188,8 +239,12 @@ bot.hears(/^[/!]모두$/, (ctx) => {
 // /추천 (일정을 같은 메시지 아랫줄에 적어도 됨)
 bot.hears(/^[/!]추천/, (ctx) => reply(ctx, ctx.message.text.replace(/^[/!]추천/, '')));
 
-const reply = (ctx: any, text: string) =>
-    ctx.reply(who(ctx) + planText(parseSchedule(text), getChat(ctx.from.id).goals, nowKST().today), html);
+// 보낸 일정에 오늘 요일의 고정 일정을 더해서 계획을 짠다
+const reply = (ctx: any, text: string) => {
+    const { today } = nowKST();
+    const c = getChat(ctx.from.id);
+    return ctx.reply(who(ctx) + planText(mergeBusy(parseSchedule(text), fixedOn(c.fixed ?? [], today)), c.goals, today), html);
+};
 
 bot.on('text', (ctx) => {
     const text = ctx.message.text.trim();
@@ -212,12 +267,14 @@ async function morningCheck() {
             .map((g) => ({ g, d: daysLeft(g.exam, today) }))
             .filter((x) => x.d !== null && x.d >= 0)
             .map(({ g, d }) => `${escapeHtml(g.subject)} D-${d}`);
+        const fixed = fixedOn(c.fixed ?? [], today).map((f) => `• ${fmt(f.start)}–${fmt(f.end)} ${escapeHtml(f.label)}`);
+        const fixedText = fixed.length ? `\n\n🔁 오늘 고정 일정 (자동으로 넣어요)\n${fixed.join('\n')}` : '';
         const chatId = c.chat ?? userId;
         const name = String(chatId) !== userId && c.name ? `${escapeHtml(c.name)}님, ` : ''; // 단톡방이면 누구에게 묻는지
         await bot.telegram
             .sendMessage(
                 chatId,
-                `☀️ <b>${name}좋은 아침이에요!</b>${exams.length ? `\n⏳ ${exams.join(' · ')}` : ''}\n\n오늘 꼭 해야 할 일정을 한 줄에 하나씩 보내 주세요.\n<code>9-12 수업\n14-16 알바</code>\n없으면 <code>없음</code>`,
+                `☀️ <b>${name}좋은 아침이에요!</b>${exams.length ? `\n⏳ ${exams.join(' · ')}` : ''}${fixedText}\n\n${fixed.length ? '그 밖에 ' : '오늘 '}꼭 해야 할 일정을 한 줄에 하나씩 보내 주세요.\n<code>9-12 수업\n14-16 알바</code>\n없으면 <code>없음</code>`,
                 html,
             )
             .catch((err) => console.error(`[아침 알림 실패] ${chatId}:`, err.message));

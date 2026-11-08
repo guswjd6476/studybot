@@ -5,9 +5,11 @@
     "type": "module",
     "description": "하루 꼭 해야 할 일정을 보내면 남는 시간에 공부 계획을 추천하는 텔레그램 봇",
     "scripts": {
-        "start": "node --env-file-if-exists=.env --experimental-strip-types src/bot.ts",
-        "test": "node --experimental-strip-types --test test/*.test.ts",
-        "typecheck": "tsc --noEmit"
+        "build": "tsc",
+        "start": "node dist/bot.js",
+        "dev": "ts-node src/bot.ts",
+        "typecheck": "tsc --noEmit",
+        "test": "tsc && node --test \"dist/**/*.test.js\""
     },
     "engines": {
         "node": ">=22.9"
