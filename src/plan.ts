@@ -140,3 +140,38 @@ export function planText(busy: Busy[], goals: Goal[], today: string): string {
 export function escapeHtml(s: string) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ── 공부 기록 ──
+export interface Done {
+    date: string; // 'YYYY-MM-DD'
+    subject: string;
+    min: number;
+}
+
+// 공부 시간: '50', '50분', '1시간', '1시간 30분', '1.5시간', '1h30m' → 분 (하루 넘거나 0이면 null)
+export function parseMinutes(s: string): number | null {
+    const m = s.normalize('NFKC').replace(/\s+/g, '').match(/^(?:(\d+(?:\.\d+)?)(?:시간|h))?(?:(\d+)(?:분|m)?)?$/i);
+    if (!m || (!m[1] && !m[2])) return null;
+    const min = Math.round(Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0));
+    return min > 0 && min <= 24 * 60 ? min : null;
+}
+
+export const dur = (min: number) => {
+    const h = Math.floor(min / 60), m = min % 60;
+    return h ? `${h}시간${m ? ` ${m}분` : ''}` : `${m}분`;
+};
+
+// 기간(from~to, 날짜 포함) 과목별 합계, 많이 한 순
+export function totals(log: Done[], from: string, to: string): [string, number][] {
+    const sum = new Map<string, number>();
+    for (const d of log) if (d.date >= from && d.date <= to) sum.set(d.subject, (sum.get(d.subject) ?? 0) + d.min);
+    return [...sum].sort((a, b) => b[1] - a[1]);
+}
+
+export const sumMin = (log: Done[], from: string, to: string) => totals(log, from, to).reduce((a, [, m]) => a + m, 0);
+
+// 이번 주 월요일
+export const weekStart = (today: string) => {
+    const t = Date.parse(today);
+    return new Date(t - ((new Date(t).getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+};

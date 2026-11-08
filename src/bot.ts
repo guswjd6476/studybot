@@ -1,7 +1,7 @@
 // 공부 추천 텔레그램 봇: 오늘 꼭 해야 할 일정을 보내면 남는 시간에 공부 계획을 추천한다
 // 실행: TELEGRAM_BOT_TOKEN=... npm start (롱 폴링이라 웹훅·공개 주소가 필요 없다)
 import { Telegraf } from 'telegraf';
-import { daysLeft, escapeHtml, parseSchedule, planText, type Goal } from './plan.ts';
+import { daysLeft, dur, escapeHtml, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart, type Done, type Goal } from './plan.ts';
 import { allChats, getChat, updateChat } from './store.ts';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -38,23 +38,31 @@ function nowKST() {
 }
 
 const HELP = [
-    '📚 <b>공부 추천 봇</b>',
+    '📚 <b>공부 관리 봇</b>',
     '',
-    '오늘 <b>꼭 해야 할 일정</b>을 한 줄에 하나씩 보내면, 남는 시간에 무엇을 어떻게 공부할지 짜 드려요.',
+    '📅 <b>오늘 계획</b>',
+    '꼭 해야 할 일정을 한 줄에 하나씩 보내면 남는 시간에 공부 계획을 짜 드려요.',
     '<code>9-12 수업',
-    '14:00~16:00 알바',
-    '오후 7시부터 8시 저녁 약속</code>',
-    '일정이 없으면 <code>없음</code> 이라고 보내세요.',
+    '14:00~16:00 알바</code>',
+    '• 일정이 없으면 <code>없음</code> · 하루 전체로 짜기 <code>/추천</code>',
     '',
-    '<b>명령어</b>',
-    '• <code>/목표 수학 2026-12-10</code> 과목 등록 (시험일은 없어도 됨, <code>12/10</code>도 가능)',
-    '• <code>/목표</code> 등록한 과목 보기 · <code>/목표삭제 수학</code>',
-    '• <code>/추천</code> 일정 없이 하루 전체로 추천',
+    '🎯 <b>과목</b>',
+    '• <code>/목표 수학 12/10</code> 과목 등록 (시험일은 없어도 돼요)',
+    '• <code>/목표</code> 내 과목 보기 · <code>/목표삭제 수학</code>',
+    '',
+    '✏️ <b>공부 기록</b>',
+    '• <code>/기록 수학 50분</code> 공부한 시간 남기기 (<code>1시간 30분</code>, <code>90</code>도 돼요)',
+    '• <code>/기록취소</code> 오늘 마지막 기록 지우기',
+    '• <code>/오늘</code> · <code>/이번주</code> 공부한 시간 보기',
+    '',
+    '⏰ <b>알림</b>',
     '• <code>/알림 07:30</code> 매일 아침 일정 묻기 (기본 07:30) · <code>/알림 끄기</code>',
-    '• <code>/모두</code> 단톡방에서 같이 쓰는 사람들의 과목·D-day 보기',
     '',
-    '<i>단톡방에 초대하면 과목·알림은 사람마다 따로 저장되고, 추천은 방에 올라와 서로 볼 수 있어요.</i>',
-    '<i>공부 시간은 08:00~23:00, 50분 공부 · 10분 쉬기로 나눕니다. 시험이 가까운 과목이 더 자주 들어가요.</i>',
+    '👥 <b>같이 쓰기</b>',
+    '단톡방에 저를 초대하면 과목·기록은 사람마다 따로 저장되고, 결과는 방에서 같이 봐요.',
+    '• <code>/모두</code> 같이 쓰는 사람들의 공부 시간·과목·D-day',
+    '',
+    '<i>계획은 08:00~23:00, 50분 공부 · 10분 쉬기. 시험이 가까운 과목이 더 자주 들어가요.</i>',
 ].join('\n');
 
 bot.start((ctx) => {
@@ -129,11 +137,51 @@ bot.hears(/^[/!]알림(?:\s+(\S+))?$/, (ctx) => {
     return ctx.reply(`${who(ctx)}⏰ 매일 ${hm}에 이 방에서 오늘 일정을 물어볼게요.`, html);
 });
 
+// 공부 기록: /기록 수학 50분
+bot.hears(/^[/!]기록(?:\s+(\S+)(?:\s+(.+))?)?$/, (ctx) => {
+    const [, subject, raw] = ctx.match;
+    const min = raw ? parseMinutes(raw) : null;
+    if (!subject || !min)
+        return ctx.reply('✏️ 이렇게 적어 주세요: <code>/기록 수학 50분</code> (<code>1시간 30분</code>, <code>90</code>도 돼요)', html);
+    const { today } = nowKST();
+    updateChat(ctx.from.id, (c) => (c.log = [...(c.log ?? []), { date: today, subject, min }]));
+    const sum = sumMin(getChat(ctx.from.id).log!, today, today);
+    return ctx.reply(`${who(ctx)}✅ ${escapeHtml(subject)} ${dur(min)} 기록 · 오늘 총 <b>${dur(sum)}</b>`, html);
+});
+
+bot.hears(/^[/!]기록취소$/, (ctx) => {
+    const last = getChat(ctx.from.id).log?.at(-1);
+    if (!last || last.date !== nowKST().today) return ctx.reply(`${who(ctx)}오늘 지울 기록이 없어요.`, html);
+    updateChat(ctx.from.id, (c) => c.log!.pop());
+    return ctx.reply(`${who(ctx)}🗑 ${escapeHtml(last.subject)} ${dur(last.min)} 기록을 지웠어요.`, html);
+});
+
+function statText(log: Done[] = [], from: string, to: string, title: string) {
+    const rows = totals(log, from, to);
+    if (!rows.length) return `${title}\n아직 기록이 없어요. 예) <code>/기록 수학 50분</code>`;
+    const sum = rows.reduce((a, [, m]) => a + m, 0);
+    return `${title} · 총 <b>${dur(sum)}</b>\n${rows.map(([s, m]) => `• ${escapeHtml(s)} ${dur(m)}`).join('\n')}`;
+}
+
+bot.hears(/^[/!]오늘$/, (ctx) => {
+    const { today } = nowKST();
+    return ctx.reply(who(ctx) + statText(getChat(ctx.from.id).log, today, today, '📊 <b>오늘 공부</b>'), html);
+});
+
+bot.hears(/^[/!]이번주$/, (ctx) => {
+    const { today } = nowKST();
+    return ctx.reply(who(ctx) + statText(getChat(ctx.from.id).log, weekStart(today), today, '📊 <b>이번 주 공부</b> (월요일부터)'), html);
+});
+
 bot.hears(/^[/!]모두$/, (ctx) => {
     if (ctx.chat.type === 'private') return ctx.reply('단톡방에서 쓰는 명령어예요. 같이 공부할 사람과 단톡방에 저를 초대해 주세요.');
     const { today } = nowKST();
+    const week = weekStart(today);
     const members = allChats().filter(([, c]) => c.groups?.includes(ctx.chat.id));
-    const text = members.map(([, c]) => `👤 <b>${escapeHtml(c.name ?? '?')}</b>\n${goalLines(c.goals, today) || '(과목 없음)'}`);
+    const text = members.map(([, c]) => {
+        const log = c.log ?? [];
+        return `👤 <b>${escapeHtml(c.name ?? '?')}</b> · 오늘 ${dur(sumMin(log, today, today))} · 이번 주 ${dur(sumMin(log, week, today))}\n${goalLines(c.goals, today) || '(과목 없음)'}`;
+    });
     return ctx.reply(`👥 <b>같이 공부하는 사람</b>\n\n${text.join('\n\n')}`, html);
 });
 

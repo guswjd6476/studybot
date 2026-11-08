@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPlan, fmt, freeBlocks, parseSchedule, planText } from '../src/plan.ts';
+import { buildPlan, dur, fmt, freeBlocks, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart } from '../src/plan.ts';
 
 const TODAY = '2026-11-08';
 
@@ -47,4 +47,28 @@ test('식사 시간(12–13시·18–19시)은 일정과 겹치지 않으면 비
 test('목표가 없거나 빈 시간이 없을 때 안내', () => {
     assert.match(planText([], [], TODAY), /\/목표 수학/);
     assert.match(planText(parseSchedule('8-23 근무'), [], TODAY), /빈 시간이 없어요/);
+});
+
+test('공부 시간 읽기', () => {
+    const cases: [string, number | null][] = [
+        ['50', 50], ['50분', 50], ['1시간', 60], ['1시간 30분', 90], ['1.5시간', 90], ['1h30m', 90], ['２시간', 120],
+        ['0', null], ['25시간', null], ['수학', null], ['', null], ['1.5', null],
+    ];
+    for (const [s, want] of cases) assert.equal(parseMinutes(s), want, s);
+    assert.equal(dur(50), '50분');
+    assert.equal(dur(60), '1시간');
+    assert.equal(dur(130), '2시간 10분');
+});
+
+test('기록 합계와 이번 주', () => {
+    assert.equal(weekStart('2026-11-08'), '2026-11-02'); // 일요일 → 그 주 월요일
+    assert.equal(weekStart('2026-11-02'), '2026-11-02');
+    const log = [
+        { date: '2026-11-01', subject: '수학', min: 100 }, // 지난주
+        { date: '2026-11-03', subject: '수학', min: 50 },
+        { date: '2026-11-08', subject: '영어', min: 30 },
+        { date: '2026-11-08', subject: '수학', min: 60 },
+    ];
+    assert.deepEqual(totals(log, '2026-11-02', '2026-11-08'), [['수학', 110], ['영어', 30]]);
+    assert.equal(sumMin(log, '2026-11-08', '2026-11-08'), 90);
 });
