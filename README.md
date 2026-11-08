@@ -26,7 +26,8 @@ AI 없이 정해 둔 규칙으로 추천합니다.
 ## 실행
 1. 텔레그램 @BotFather 에서 봇을 만들고 토큰을 받습니다.
 2. `.env` 파일을 만들고 `TELEGRAM_BOT_TOKEN=받은토큰` 한 줄을 넣습니다.
-3. `npm install` → `npm start` (Node 20.6 이상, 시작할 때 `dist/`로 빌드한 뒤 실행, 롱 폴링이라 공개 주소·웹훅 불필요)
+3. `npm install` → `npm run build` → `npm start` (Node 20.6 이상, 코드를 바꾸거나 `git pull` 한 뒤엔 다시 `npm run build`)
+   - 롱 폴링이라 도메인·HTTPS·웹훅이 필요 없고, 계속 켜져 있는 무료 서버 하나면 됩니다 (아침 알림 때문에 잠드는 호스팅은 안 맞음)
 
 - 테스트: `npm test` · 타입 검사: `npm run typecheck`
 - 데이터는 `data/store.json` 한 파일에 저장됩니다 (봇은 한 곳에서만 띄우세요).

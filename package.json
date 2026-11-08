@@ -5,7 +5,7 @@
     "type": "module",
     "description": "하루 꼭 해야 할 일정을 보내면 남는 시간에 공부 계획을 추천하는 텔레그램 봇",
     "scripts": {
-        "start": "tsc && node --env-file=.env dist/src/bot.js",
+        "start": "node --env-file=.env dist/src/bot.js",
         "dev": "node --env-file-if-exists=.env --experimental-strip-types src/bot.ts",
         "build": "tsc",
         "typecheck": "tsc --noEmit",
