@@ -95,14 +95,17 @@ const MEALS: Busy[] = [
     { start: 18 * 60, end: 19 * 60, label: '저녁' },
 ];
 
-export function buildPlan(busy: Busy[], goals: Goal[], today: string): Session[] {
+// maxMin: 하루 공부 상한(분). 빈 시간을 앞에서부터 채우다 상한에 닿으면 멈춘다
+export function buildPlan(busy: Busy[], goals: Goal[], today: string, maxMin = Infinity): Session[] {
     const meals = MEALS.filter((m) => !busy.some((b) => b.start < m.end && m.start < b.end));
     const slots: { start: number; end: number }[] = [];
+    let left = maxMin;
     for (const [s, e] of freeBlocks([...busy, ...meals].sort((a, b) => a.start - b.start))) {
         let t = s;
-        while (e - t >= MIN_BLOCK) {
-            const len = Math.min(STUDY, e - t);
+        while (e - t >= MIN_BLOCK && left >= MIN_BLOCK) {
+            const len = Math.min(STUDY, e - t, left);
             slots.push({ start: t, end: t + len });
+            left -= len;
             t += len + BREAK;
         }
     }
@@ -113,20 +116,22 @@ export function buildPlan(busy: Busy[], goals: Goal[], today: string): Session[]
     });
 }
 
-export function planText(busy: Busy[], goals: Goal[], today: string): string {
-    const sessions = buildPlan(busy, goals, today);
+// when: 제목에 쓸 날 ('오늘'·'내일'), today: 그 날짜 (D-day도 이 날 기준)
+export function planText(busy: Busy[], goals: Goal[], today: string, maxMin = Infinity, when = '오늘'): string {
+    const sessions = buildPlan(busy, goals, today, maxMin);
     const minutes = sessions.reduce((n, s) => n + s.end - s.start, 0);
-    const lines = [`📅 <b>오늘 공부 추천</b> (${today})`, ''];
+    const lines = [`📅 <b>${when} 공부 추천</b> (${today})`, ''];
     if (busy.length) {
         lines.push('📌 <b>꼭 할 일</b>');
         for (const b of busy) lines.push(`• ${fmt(b.start)}–${fmt(b.end)} ${escapeHtml(b.label)}`);
         lines.push('');
     }
     if (!sessions.length) {
-        lines.push('오늘은 30분 이상 빈 시간이 없어요. 이동 중에 암기 카드만 10분 보기를 추천해요.');
+        lines.push(`${when}은 30분 이상 빈 시간이 없어요. 이동 중에 암기 카드만 10분 보기를 추천해요.`);
         return lines.join('\n');
     }
     lines.push(`📚 <b>공부 ${Math.floor(minutes / 60)}시간 ${minutes % 60}분</b> (50분 공부 · 10분 쉬기, 식사 시간은 비워 둠)`);
+    if (Number.isFinite(maxMin) && maxMin - minutes >= MIN_BLOCK) lines.push(`<i>빈 시간이 부족해서 하루 목표 ${dur(maxMin)}보다 적게 잡았어요.</i>`);
     for (const s of sessions) lines.push(`• ${fmt(s.start)}–${fmt(s.end)} <b>${escapeHtml(s.subject)}</b> · ${s.method}`);
     const exams = goals
         .map((g) => ({ g, d: daysLeft(g.exam, today) }))

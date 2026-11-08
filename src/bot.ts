@@ -62,7 +62,9 @@ const HELP = [
     '꼭 해야 할 일정을 한 줄에 하나씩 보내면 남는 시간에 공부 계획을 짜 드려요.',
     '<code>9-12 수업',
     '14:00~16:00 알바</code>',
-    '• 일정이 없으면 <code>없음</code> · 하루 전체로 짜기 <code>/추천</code>',
+    '• 일정이 없으면 <code>없음</code> 또는 <code>/추천</code>',
+    '• 내일 미리 짜기: <code>/내일</code> 다음 줄부터 내일 일정 (없으면 <code>/내일</code>만)',
+    '• <code>/공부시간 4시간</code> 하루에 공부할 시간 (기본 4시간)',
     '',
     '🔁 <b>고정 일정</b> (알바·학원처럼 매주 같은 것)',
     '• <code>/고정 월수금 18-22 알바</code> 한 번 등록하면 그 요일 계획에 자동으로 빠져요',
@@ -238,13 +240,29 @@ bot.hears(/^[/!]모두$/, (ctx) => {
 
 // /추천 (일정을 같은 메시지 아랫줄에 적어도 됨)
 bot.hears(/^[/!]추천/, (ctx) => reply(ctx, ctx.message.text.replace(/^[/!]추천/, '')));
+// /내일 (내일 일정을 같은 메시지에 적어도 됨): 내일 요일의 고정 일정·D-day로 짠다
+bot.hears(/^[/!]내일/, (ctx) => reply(ctx, ctx.message.text.replace(/^[/!]내일/, ''), 1));
 
-// 보낸 일정에 오늘 요일의 고정 일정을 더해서 계획을 짠다
-const reply = (ctx: any, text: string) => {
-    const { today } = nowKST();
+// 보낸 일정에 오늘 요일의 고정 일정을 더해서, 하루 공부 상한만큼 계획을 짠다
+const DAILY = 4 * 60;
+const reply = (ctx: any, text: string, after = 0) => {
+    const day = new Date(Date.parse(nowKST().today) + after * 86_400_000).toISOString().slice(0, 10);
     const c = getChat(ctx.from.id);
-    return ctx.reply(who(ctx) + planText(mergeBusy(parseSchedule(text), fixedOn(c.fixed ?? [], today)), c.goals, today), html);
+    const busy = mergeBusy(parseSchedule(text), fixedOn(c.fixed ?? [], day));
+    return ctx.reply(who(ctx) + planText(busy, c.goals, day, c.daily ?? DAILY, after ? '내일' : '오늘'), html);
 };
+
+// 하루 공부 시간: /공부시간 4시간
+bot.hears(/^[/!]공부시간(?:\s+(.+))?$/, (ctx) => {
+    const raw = ctx.match[1];
+    const min = raw ? parseMinutes(raw) : null;
+    if (!min || min < 30 || min > 15 * 60) {
+        const cur = getChat(ctx.from.id).daily ?? DAILY;
+        return ctx.reply(`${who(ctx)}⏱ 하루 공부 목표: <b>${dur(cur)}</b>\n바꾸기: <code>/공부시간 3시간</code> (30분~15시간)`, html);
+    }
+    updateChat(ctx.from.id, (c) => (c.daily = min));
+    return ctx.reply(`${who(ctx)}⏱ 하루 공부 목표를 <b>${dur(min)}</b>으로 바꿨어요. 추천을 이만큼만 짤게요.`, html);
+});
 
 bot.on('text', (ctx) => {
     const text = ctx.message.text.trim();

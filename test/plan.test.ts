@@ -95,3 +95,20 @@ test('고정 일정: 요일 읽기와 오늘 일정 합치기', () => {
     assert.deepEqual(busy.map((b) => b.label), ['수업', '알바']); // 같은 시간은 한 번만
     assert.deepEqual(mergeBusy(parseSchedule('9-12 수업'), today).map((b) => [fmt(b.start), b.label]), [['09:00', '수업'], ['18:00', '알바 🔁']]);
 });
+
+test('하루 공부 상한', () => {
+    const total = (s: { start: number; end: number }[]) => s.reduce((n, x) => n + x.end - x.start, 0);
+    const busy = parseSchedule('9-12 수업');
+    assert.equal(total(buildPlan(busy, [], TODAY, 240)), 240); // 50×4 + 40
+    assert.equal(total(buildPlan(busy, [], TODAY, 90)), 90);
+    assert.ok(total(buildPlan(busy, [], TODAY)) > 240); // 상한 없으면 빈 시간 전부
+    // 빈 시간이 모자라면 있는 만큼 + 안내
+    const text = planText(parseSchedule('8-22 일'), [], TODAY, 240);
+    assert.match(text, /하루 목표 4시간보다 적게/);
+    assert.doesNotMatch(planText(busy, [], TODAY, 240), /적게/);
+});
+
+test('내일 계획 제목', () => {
+    assert.match(planText([], [], '2026-11-09', 240, '내일'), /📅 <b>내일 공부 추천<\/b> \(2026-11-09\)/);
+    assert.match(planText(parseSchedule('8-23 일'), [], '2026-11-09', 240, '내일'), /^📅[\s\S]*내일은 30분 이상/);
+});

@@ -12,6 +12,7 @@ export interface ChatData {
     name?: string; // 단톡방에서 누구 것인지 보여줄 이름
     chat?: number; // 아침 알림을 보낼 대화방 (없으면 1:1)
     groups?: number[]; // 같이 쓰는 단톡방 (/모두 에 보이는 곳)
+    daily?: number; // 하루 공부 상한(분), 없으면 기본 4시간
     fixed?: Fixed[]; // 매주 반복되는 고정 일정
     log?: Done[]; // 공부 기록 (shortcut: 계속 쌓기만 한다, 하루 몇 건이라 몇 년은 괜찮고 느려지면 오래된 걸 지운다)
 }
