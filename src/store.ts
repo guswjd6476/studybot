@@ -3,7 +3,7 @@
 // shortcut: 파일 하나라 봇 서버를 여러 대 띄우면 안 되고, 사용자가 수백 명을 넘으면 DB로 옮긴다
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Done, Fixed, Goal } from './plan.ts';
+import type { Done, Fixed, Goal, Session, Todo } from './plan.ts';
 
 export interface ChatData {
     goals: Goal[];
@@ -14,6 +14,10 @@ export interface ChatData {
     groups?: number[]; // 같이 쓰는 단톡방 (/모두 에 보이는 곳)
     daily?: number; // 하루 공부 상한(분), 없으면 기본 4시간
     fixed?: Fixed[]; // 매주 반복되는 고정 일정
+    timer?: { subject: string; start: number }; // 켜진 공부 타이머 (start = epoch ms)
+    plan?: { date: string; chat: number; sessions: Session[]; next: number }; // 오늘 계획, next = 다음에 알릴 칸
+    nudge?: boolean; // false면 공부 시작 알림 끔
+    todos?: Todo[]; // 할 일 체크리스트
     log?: Done[]; // 공부 기록 (shortcut: 계속 쌓기만 한다, 하루 몇 건이라 몇 년은 괜찮고 느려지면 오래된 걸 지운다)
 }
 

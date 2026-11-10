@@ -1,26 +1,32 @@
 // 공부 추천 텔레그램 봇: 오늘 꼭 해야 할 일정을 보내면 남는 시간에 공부 계획을 추천한다
 // 실행: TELEGRAM_BOT_TOKEN=... npm start (롱 폴링이라 웹훅·공개 주소가 필요 없다)
+import type { ServerResponse } from 'node:http';
 import { Telegraf } from 'telegraf';
 import {
+    buildPlan,
     dayNames,
     daysLeft,
     dur,
     escapeHtml,
     fixedOn,
     fmt,
+    keepTodos,
     mergeBusy,
+    parseNums,
     parseDays,
     parseMinutes,
     parseSchedule,
     planText,
+    streak,
     sumMin,
     totals,
     weekStart,
     type Done,
     type Fixed,
     type Goal,
+    type Todo,
 } from './plan.ts';
-import { allChats, getChat, updateChat } from './store.ts';
+import { allChats, getChat, updateChat, type ChatData } from './store.ts';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -49,10 +55,19 @@ bot.use((ctx, next) => {
 // 단톡방에서는 누구 것인지 이름을 붙인다
 const who = (ctx: any) => (ctx.chat.type === 'private' ? '' : `👤 <b>${escapeHtml(ctx.from.first_name)}</b>\n`);
 
-// 한국 시간 오늘 날짜·시각
+// 한국 시간 오늘 날짜·시각 (min = 자정부터 분)
 function nowKST() {
     const iso = new Date(Date.now() + 9 * 3_600_000).toISOString();
-    return { today: iso.slice(0, 10), hm: iso.slice(11, 16), year: Number(iso.slice(0, 4)) };
+    const hm = iso.slice(11, 16);
+    return { today: iso.slice(0, 10), hm, min: Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3)), year: Number(iso.slice(0, 4)) };
+}
+const kstDate = (ms: number) => new Date(ms + 9 * 3_600_000).toISOString().slice(0, 10);
+
+// 오늘 목표 대비 공부한 시간 + 연속 공부일
+function progress(c: ChatData, today: string) {
+    const done = sumMin(c.log ?? [], today, today), goal = c.daily ?? DAILY;
+    const s = streak(c.log ?? [], today);
+    return `오늘 <b>${dur(done)}</b> / 목표 ${dur(goal)} (${Math.round((done / goal) * 100)}%)${s ? ` · 🔥 ${s}일 연속` : ''}`;
 }
 
 const HELP = [
@@ -78,11 +93,18 @@ const HELP = [
     '',
     '✏️ <b>공부 기록</b>',
     '• <code>/기록 수학 50분</code> 공부한 시간 남기기 (<code>1시간 30분</code>, <code>90</code>도 돼요)',
+    '• <code>/시작 수학</code> 타이머 켜기 → <code>/끝</code> 하면 걸린 시간이 자동으로 기록돼요 (과목을 안 적으면 계획의 지금 과목)',
     '• <code>/기록취소</code> 오늘 마지막 기록 지우기',
-    '• <code>/오늘</code> · <code>/이번주</code> 공부한 시간 보기',
+    '• <code>/오늘</code> · <code>/이번주</code> 공부한 시간 (오늘은 목표 달성률·🔥 연속 공부일도)',
+    '',
+    '📝 <b>할 일</b>',
+    '• <code>/할일 수학 문제집 3장</code> 추가 (여러 줄로 한꺼번에도 돼요) · <code>/할일</code> 목록',
+    '• <code>/완료 1 3</code> 체크 (다시 하면 풀려요) · <code>/할일삭제 2</code>',
+    '• 못 끝낸 건 다음 날로 넘어가고, 끝낸 건 다음 날 사라져요',
     '',
     '⏰ <b>알림</b>',
     '• <code>/알림 07:30</code> 매일 아침 일정 묻기 (기본 07:30) · <code>/알림 끄기</code>',
+    '• 오늘 계획을 짜면 공부 칸이 시작할 때마다 알려 드려요 · <code>/시간알림 끄기</code>',
     '',
     '👥 <b>같이 쓰기</b>',
     '단톡방에 저를 초대하면 과목·기록은 사람마다 따로 저장되고, 결과는 방에서 같이 봐요.',
@@ -199,8 +221,37 @@ bot.hears(/^[/!]기록(?:\s+(\S+)(?:\s+(.+))?)?$/, (ctx) => {
         return ctx.reply('✏️ 이렇게 적어 주세요: <code>/기록 수학 50분</code> (<code>1시간 30분</code>, <code>90</code>도 돼요)', html);
     const { today } = nowKST();
     updateChat(ctx.from.id, (c) => (c.log = [...(c.log ?? []), { date: today, subject, min }]));
-    const sum = sumMin(getChat(ctx.from.id).log!, today, today);
-    return ctx.reply(`${who(ctx)}✅ ${escapeHtml(subject)} ${dur(min)} 기록 · 오늘 총 <b>${dur(sum)}</b>`, html);
+    return ctx.reply(`${who(ctx)}✅ ${escapeHtml(subject)} ${dur(min)} 기록\n${progress(getChat(ctx.from.id), today)}`, html);
+});
+
+// 공부 타이머: /시작 수학 → /끝 하면 걸린 시간을 기록한다
+const elapsed = (t: { start: number }) => Math.floor((Date.now() - t.start) / 60_000);
+const MAX_TIMER = 5 * 60; // 이보다 길면 끄는 걸 잊은 걸로 보고 기록하지 않는다
+
+bot.hears(/^[/!]시작(?:\s+(\S+))?$/, (ctx) => {
+    const c = getChat(ctx.from.id);
+    if (c.timer)
+        return ctx.reply(`${who(ctx)}⏱ 이미 <b>${escapeHtml(c.timer.subject)}</b> 공부 중이에요 (${dur(elapsed(c.timer))}째). 마치려면 <code>/끝</code>`, html);
+    const { today, min } = nowKST();
+    const planned = c.plan?.date === today ? c.plan.sessions.find((s) => s.end > min) : undefined; // 지금(또는 다음) 계획 칸
+    const subject = ctx.match[1] ?? planned?.subject ?? '공부';
+    updateChat(ctx.from.id, (x) => (x.timer = { subject, start: Date.now() }));
+    return ctx.reply(`${who(ctx)}⏱ <b>${escapeHtml(subject)}</b> 시작! 끝나면 <code>/끝</code> 보내 주세요. 걸린 시간을 자동으로 기록해요.`, html);
+});
+
+bot.hears(/^[/!](끝|종료)$/, (ctx) => {
+    const t = getChat(ctx.from.id).timer;
+    if (!t) return ctx.reply(`${who(ctx)}켜진 타이머가 없어요. <code>/시작 수학</code> 으로 켜세요.`, html);
+    const min = elapsed(t);
+    const ok = min >= 1 && min <= MAX_TIMER;
+    updateChat(ctx.from.id, (c) => {
+        delete c.timer;
+        if (ok) c.log = [...(c.log ?? []), { date: kstDate(t.start), subject: t.subject, min }]; // 자정을 넘겨도 시작한 날로
+    });
+    if (min < 1) return ctx.reply(`${who(ctx)}1분이 안 돼서 기록하지 않았어요.`, html);
+    if (!ok)
+        return ctx.reply(`${who(ctx)}⚠️ 타이머가 ${dur(min)} 켜져 있었어요. 끄는 걸 잊은 것 같아 기록하지 않았어요.\n공부한 만큼 직접 적어 주세요: <code>/기록 ${escapeHtml(t.subject)} 2시간</code>`, html);
+    return ctx.reply(`${who(ctx)}✅ ${escapeHtml(t.subject)} ${dur(min)} 기록\n${progress(getChat(ctx.from.id), nowKST().today)}`, html);
 });
 
 bot.hears(/^[/!]기록취소$/, (ctx) => {
@@ -219,7 +270,10 @@ function statText(log: Done[] = [], from: string, to: string, title: string) {
 
 bot.hears(/^[/!]오늘$/, (ctx) => {
     const { today } = nowKST();
-    return ctx.reply(who(ctx) + statText(getChat(ctx.from.id).log, today, today, '📊 <b>오늘 공부</b>'), html);
+    const c = getChat(ctx.from.id);
+    const todos = keepTodos(c.todos ?? [], today);
+    const todoText = todos.length ? ` · 📝 할 일 ${todos.filter((t) => t.done).length}/${todos.length}` : '';
+    return ctx.reply(`${who(ctx)}${statText(c.log, today, today, '📊 <b>오늘 공부</b>')}\n\n${progress(c, today)}${todoText}`, html);
 });
 
 bot.hears(/^[/!]이번주$/, (ctx) => {
@@ -234,7 +288,8 @@ bot.hears(/^[/!]모두$/, (ctx) => {
     const members = allChats().filter(([, c]) => c.groups?.includes(ctx.chat.id));
     const text = members.map(([, c]) => {
         const log = c.log ?? [];
-        return `👤 <b>${escapeHtml(c.name ?? '?')}</b> · 오늘 ${dur(sumMin(log, today, today))} · 이번 주 ${dur(sumMin(log, week, today))}\n${goalLines(c.goals, today) || '(과목 없음)'}`;
+        const s = streak(log, today);
+        return `👤 <b>${escapeHtml(c.name ?? '?')}</b> · 오늘 ${dur(sumMin(log, today, today))} · 이번 주 ${dur(sumMin(log, week, today))}${s ? ` · 🔥 ${s}일` : ''}${c.timer ? ' · ⏱ 공부 중' : ''}\n${goalLines(c.goals, today) || '(과목 없음)'}`;
     });
     return ctx.reply(`👥 <b>같이 공부하는 사람</b>\n\n${text.join('\n\n')}`, html);
 });
@@ -250,8 +305,69 @@ const reply = (ctx: any, text: string, after = 0) => {
     const day = new Date(Date.parse(nowKST().today) + after * 86_400_000).toISOString().slice(0, 10);
     const c = getChat(ctx.from.id);
     const busy = mergeBusy(parseSchedule(text), fixedOn(c.fixed ?? [], day));
-    return ctx.reply(who(ctx) + planText(busy, c.goals, day, c.daily ?? DAILY, after ? '내일' : '오늘'), html);
+    let note = '';
+    if (!after) {
+        // 오늘 계획을 저장해 두고 칸이 시작할 때 알린다 (shortcut: 계획은 하나만, /내일 계획은 알리지 않음)
+        const sessions = buildPlan(busy, c.goals, day, c.daily ?? DAILY);
+        const next = sessions.filter((s) => s.start < nowKST().min).length;
+        updateChat(ctx.from.id, (x) => (x.plan = { date: day, chat: ctx.chat.id, sessions, next }));
+        if (c.nudge !== false && next < sessions.length) note = '\n\n⏰ 공부 칸이 시작할 때마다 알려 드릴게요 · <code>/시간알림 끄기</code>';
+    }
+    const left = keepTodos(c.todos ?? [], day).filter((t) => !t.done);
+    if (left.length) note = `\n\n📝 <b>남은 할 일</b>\n${left.map((t) => `⬜ ${escapeHtml(t.text)}`).join('\n')}` + note;
+    return ctx.reply(who(ctx) + planText(busy, c.goals, day, c.daily ?? DAILY, after ? '내일' : '오늘') + note, html);
 };
+
+// ── 할 일 체크리스트 ──
+// 어제까지 끝낸 걸 정리한 목록 (정리된 게 있으면 저장)
+function todosOf(userId: number, today: string): Todo[] {
+    const all = getChat(userId).todos ?? [];
+    const kept = keepTodos(all, today);
+    if (kept.length !== all.length) updateChat(userId, (c) => (c.todos = kept));
+    return kept;
+}
+
+function todoReply(ctx: any, head = '') {
+    const todos = todosOf(ctx.from.id, nowKST().today);
+    if (!todos.length) return ctx.reply(`${who(ctx)}${head}할 일이 없어요. 예) <code>/할일 수학 문제집 3장</code>`, html);
+    const done = todos.filter((t) => t.done).length;
+    const list = todos.map((t, i) => `${t.done ? '✅' : '⬜'} ${i + 1}. ${escapeHtml(t.text)}`).join('\n');
+    return ctx.reply(`${who(ctx)}${head}📝 <b>할 일</b> ${done}/${todos.length}\n${list}\n\n체크: <code>/완료 1</code> · 지우기: <code>/할일삭제 1</code>`, html);
+}
+
+// /할일 수학 3장 (다음 줄에 더 적으면 여러 개)
+bot.hears(/^[/!]할일(?:\s+([\s\S]+))?$/, (ctx) => {
+    const items = (ctx.match[1] ?? '').split('\n').map((s) => s.replace(/^[\s\-·•*]+/, '').trim()).filter(Boolean);
+    if (!items.length) return todoReply(ctx);
+    const today = nowKST().today;
+    const todos = todosOf(ctx.from.id, today);
+    updateChat(ctx.from.id, (c) => (c.todos = [...todos, ...items.map((text) => ({ text }))]));
+    return todoReply(ctx, `✅ ${items.length}개 추가\n\n`);
+});
+
+bot.hears(/^[/!](완료|할일삭제)(?:\s+(.+))?$/, (ctx) => {
+    const [, cmd, raw] = ctx.match;
+    const today = nowKST().today;
+    const todos = todosOf(ctx.from.id, today);
+    const nums = parseNums(raw ?? '', todos.length);
+    if (!nums) return ctx.reply(`${who(ctx)}번호를 적어 주세요. 예) <code>/${cmd} 1</code> · 번호는 <code>/할일</code> 에서 확인`, html);
+    updateChat(ctx.from.id, (c) => {
+        c.todos =
+            cmd === '완료'
+                ? todos.map((t, i) => (!nums.includes(i) ? t : t.done ? { text: t.text } : { ...t, done: today }))
+                : todos.filter((_, i) => !nums.includes(i));
+    });
+    const allDone = cmd === '완료' && (getChat(ctx.from.id).todos ?? []).every((t) => t.done);
+    return todoReply(ctx, allDone ? '🎉 오늘 할 일을 다 끝냈어요!\n\n' : '');
+});
+
+
+bot.hears(/^[/!]시간알림(?:\s+(켜기|끄기))?$/, (ctx) => {
+    const arg = ctx.match[1];
+    if (arg) updateChat(ctx.from.id, (c) => (c.nudge = arg === '켜기'));
+    const on = getChat(ctx.from.id).nudge !== false;
+    return ctx.reply(`${who(ctx)}⏰ 공부 시작 알림: <b>${on ? '켜짐' : '꺼짐'}</b> · ${on ? '<code>/시간알림 끄기</code>' : '<code>/시간알림 켜기</code>'}`, html);
+});
 
 // 하루 공부 시간: /공부시간 4시간
 bot.hears(/^[/!]공부시간(?:\s+(.+))?$/, (ctx) => {
@@ -273,13 +389,16 @@ bot.on('text', (ctx) => {
         return ctx.reply('일정은 <code>9-12 수업</code> 처럼 시간을 넣어 보내 주세요. 없으면 <code>없음</code>', html);
 });
 
+// 단톡방이면 누구에게 보내는지 이름을 붙인다
+const nameIn = (chatId: number | string, userId: string, c: ChatData) => (String(chatId) !== userId && c.name ? `${escapeHtml(c.name)}님, ` : '');
+
 // 아침 알림: 30초마다 보고, 정한 시각이 지났고 오늘 아직 안 보냈으면 보낸다 (봇을 늦게 켜도 2시간 안이면 보냄)
 async function morningCheck() {
-    const { today, hm } = nowKST();
+    const { today, hm, min } = nowKST();
     for (const [userId, c] of allChats()) {
         if (!c.morning || c.lastMorning === today || hm < c.morning) continue;
         const [h, m] = c.morning.split(':').map(Number);
-        const late = Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3)) - (h * 60 + m);
+        const late = min - (h * 60 + m);
         updateChat(userId, (x) => (x.lastMorning = today)); // 실패해도 하루 한 번만 시도
         if (late > 120) continue;
         const exams = c.goals
@@ -288,20 +407,68 @@ async function morningCheck() {
             .map(({ g, d }) => `${escapeHtml(g.subject)} D-${d}`);
         const fixed = fixedOn(c.fixed ?? [], today).map((f) => `• ${fmt(f.start)}–${fmt(f.end)} ${escapeHtml(f.label)}`);
         const fixedText = fixed.length ? `\n\n🔁 오늘 고정 일정 (자동으로 넣어요)\n${fixed.join('\n')}` : '';
+        const left = keepTodos(c.todos ?? [], today).filter((t) => !t.done);
+        const todoText = left.length ? `\n\n📝 남은 할 일 ${left.length}개\n${left.map((t) => `⬜ ${escapeHtml(t.text)}`).join('\n')}` : '';
         const chatId = c.chat ?? userId;
-        const name = String(chatId) !== userId && c.name ? `${escapeHtml(c.name)}님, ` : ''; // 단톡방이면 누구에게 묻는지
+        const name = nameIn(chatId, userId, c);
         await bot.telegram
             .sendMessage(
                 chatId,
-                `☀️ <b>${name}좋은 아침이에요!</b>${exams.length ? `\n⏳ ${exams.join(' · ')}` : ''}${fixedText}\n\n${fixed.length ? '그 밖에 ' : '오늘 '}꼭 해야 할 일정을 한 줄에 하나씩 보내 주세요.\n<code>9-12 수업\n14-16 알바</code>\n없으면 <code>없음</code>`,
+                `☀️ <b>${name}좋은 아침이에요!</b>${exams.length ? `\n⏳ ${exams.join(' · ')}` : ''}${fixedText}${todoText}\n\n${fixed.length ? '그 밖에 ' : '오늘 '}꼭 해야 할 일정을 한 줄에 하나씩 보내 주세요.\n<code>9-12 수업\n14-16 알바</code>\n없으면 <code>없음</code>`,
                 html,
             )
             .catch((err) => console.error(`[아침 알림 실패] ${chatId}:`, err.message));
     }
 }
-setInterval(() => void morningCheck().catch((err) => console.error('[아침 알림]', err)), 30_000);
+
+// 공부 시작 알림: 오늘 계획의 다음 칸 시각이 되면 알린다 (10분 넘게 늦었으면 조용히 건너뜀)
+async function sessionCheck() {
+    const { today, min } = nowKST();
+    for (const [userId, c] of allChats()) {
+        const p = c.plan;
+        if (c.nudge === false || !p || p.date !== today || p.next >= p.sessions.length || p.sessions[p.next].start > min) continue;
+        let i = p.next;
+        while (i + 1 < p.sessions.length && p.sessions[i + 1].start <= min) i++; // 봇이 꺼져 있었으면 지난 칸은 건너뛴다
+        const s = p.sessions[i];
+        updateChat(userId, (x) => (x.plan!.next = i + 1));
+        if (min - s.start > 10) continue;
+        await bot.telegram
+            .sendMessage(
+                p.chat,
+                `⏰ ${nameIn(p.chat, userId, c)}<b>${escapeHtml(s.subject)}</b> 시간이에요 (${fmt(s.start)}–${fmt(s.end)})\n${s.method}\n<code>/시작</code> 으로 타이머 켜기`,
+                html,
+            )
+            .catch((err) => console.error(`[공부 알림 실패] ${p.chat}:`, err.message));
+    }
+}
+
+setInterval(() => {
+    void morningCheck().catch((err) => console.error('[아침 알림]', err));
+    void sessionCheck().catch((err) => console.error('[공부 알림]', err));
+}, 30_000);
 
 bot.catch((err, ctx) => console.error(`[오류] ${ctx.updateType}:`, err));
-bot.launch(() => console.log('✅ 공부 추천 봇 시작'));
+// 무료 서버는 들어오는 요청이 없으면 잠들어서 폴링·알림이 멈춘다.
+// 공개 주소가 있으면 웹훅으로 받고, 봇이 5분마다 자기 주소를 불러 깨어 있게 한다 (바깥 서비스 필요 없음)
+const env = process.env;
+const host =
+    env.WEBHOOK_URL ||
+    env.RENDER_EXTERNAL_URL || // Render
+    env.KOYEB_PUBLIC_DOMAIN || // Koyeb
+    env.RAILWAY_PUBLIC_DOMAIN || // Railway
+    (env.FLY_APP_NAME && `${env.FLY_APP_NAME}.fly.dev`); // Fly.io
+if (host) {
+    const url = /^https?:\/\//.test(host) ? host : `https://${host}`;
+    const port = Number(env.PORT) || 3000;
+    const ok = (_req: unknown, res: ServerResponse) => res.end('ok'); // 웹훅이 아닌 주소 (깨우기용)
+    bot.launch({ webhook: { domain: url, port, host: env.IP, cb: ok } }, // alwaysdata 사이트는 IP·PORT를 넣어 줌
+        () => console.log(`✅ 공부 추천 봇 시작 (웹훅 ${url}, 포트 ${port})`));
+    // 대부분 15분 넘게 조용하면 잠드니 5분마다 (한두 번 실패해도 안 잠듦). 서버 안이 아니라 공개 주소로 불러야 요청으로 쳐 준다
+    const wake = () =>
+        fetch(url)
+            .then((r) => r.ok || console.error(`[깨우기] ${url} → ${r.status}`))
+            .catch((err) => console.error('[깨우기 실패]', err.message));
+    setInterval(wake, 5 * 60_000);
+} else bot.launch(() => console.log('✅ 공부 추천 봇 시작 (폴링: 공개 주소가 없음)'));
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));

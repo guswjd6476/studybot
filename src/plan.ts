@@ -176,6 +176,16 @@ export function totals(log: Done[], from: string, to: string): [string, number][
 
 export const sumMin = (log: Done[], from: string, to: string) => totals(log, from, to).reduce((a, [, m]) => a + m, 0);
 
+// 연속 공부일: 오늘(오늘 기록이 아직 없으면 어제)부터 거꾸로 기록이 있는 날 수
+export function streak(log: Done[], today: string): number {
+    const days = new Set(log.map((d) => d.date));
+    const day = (n: number) => new Date(Date.parse(today) - n * 86_400_000).toISOString().slice(0, 10);
+    let n = days.has(today) ? 0 : 1;
+    const from = n;
+    while (days.has(day(n))) n++;
+    return n - from;
+}
+
 // 이번 주 월요일
 export const weekStart = (today: string) => {
     const t = Date.parse(today);
@@ -219,4 +229,20 @@ export function mergeBusy(sent: Busy[], fixed: Busy[]): Busy[] {
     for (const f of fixed)
         if (!all.some((b) => b.start === f.start && b.end === f.end)) all.push({ start: f.start, end: f.end, label: `${f.label} 🔁` });
     return all.sort((a, b) => a.start - b.start);
+}
+
+// ── 할 일 체크리스트 ──
+export interface Todo {
+    text: string;
+    done?: string; // 끝낸 날 'YYYY-MM-DD'
+}
+
+// 어제까지 끝낸 건 지우고, 못 끝낸 건 다음 날로 이어 간다
+export const keepTodos = (todos: Todo[], today: string) => todos.filter((t) => !t.done || t.done === today);
+
+// '1 3', '1,3' → 0부터 센 번호 (없거나 범위 밖이면 null)
+export function parseNums(s: string, len: number): number[] | null {
+    const nums = s.trim().split(/[\s,]+/).map(Number);
+    if (!s.trim() || nums.some((n) => !Number.isInteger(n) || n < 1 || n > len)) return null;
+    return [...new Set(nums.map((n) => n - 1))];
 }

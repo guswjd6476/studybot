@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPlan, dayNames, dur, fixedOn, fmt, freeBlocks, mergeBusy, parseDays, parseMinutes, parseSchedule, planText, sumMin, totals, weekStart } from '../src/plan.ts';
+import { buildPlan, dayNames, dur, fixedOn, fmt, freeBlocks, mergeBusy, parseDays, parseMinutes, parseSchedule, keepTodos, parseNums, planText, streak, sumMin, totals, weekStart } from '../src/plan.ts';
 
 const TODAY = '2026-11-08';
 
@@ -123,4 +123,24 @@ test('아침 일정 적는 법', () => {
     assert.deepEqual(at('저녁 7-9'), ['19:00-21:00']);
     assert.deepEqual(at('밤 9-11 과외'), ['21:00-23:00']);
     assert.deepEqual(at('2-4 병원'), ['14:00-16:00']);
+});
+
+test('연속 공부일: 오늘 기록이 없으면 어제부터 센다', () => {
+    const log = (...dates: string[]) => dates.map((date) => ({ date, subject: '수학', min: 50 }));
+    assert.equal(streak(log('2026-11-06', '2026-11-07', '2026-11-08'), TODAY), 3);
+    assert.equal(streak(log('2026-11-06', '2026-11-07'), TODAY), 2); // 오늘은 아직
+    assert.equal(streak(log('2026-11-05', '2026-11-07', '2026-11-08'), TODAY), 2); // 6일에 끊김
+    assert.equal(streak(log('2026-11-01'), TODAY), 0);
+    assert.equal(streak([], TODAY), 0);
+});
+
+test('할 일: 어제 끝낸 것만 지우고 번호 읽기', () => {
+    const todos = [{ text: 'a' }, { text: 'b', done: '2026-11-07' }, { text: 'c', done: TODAY }];
+    assert.deepEqual(keepTodos(todos, TODAY).map((t) => t.text), ['a', 'c']);
+    assert.deepEqual(parseNums('1 3', 3), [0, 2]);
+    assert.deepEqual(parseNums('2,2', 3), [1]);
+    assert.equal(parseNums('4', 3), null);
+    assert.equal(parseNums('0', 3), null);
+    assert.equal(parseNums('', 3), null);
+    assert.equal(parseNums('a', 3), null);
 });
